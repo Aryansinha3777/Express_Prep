@@ -1,1 +1,578 @@
+📁 Final Project Structure
+auth-project/
+│
+├── config/
+│   └── db.js
+│
+├── models/
+│   └── user.model.js
+│
+├── controllers/
+│   └── auth.controller.js
+│
+├── routes/
+│   └── auth.routes.js
+│
+├── middleware/
+│   └── auth.middleware.js
+│
+├── app.js
+└── server.js
 
+🔥 1️⃣ Install Packages
+npm init -y
+npm install express mongoose bcrypt jsonwebtoken
+
+
+📁 config/db.js
+const mongoose = require("mongoose");
+
+async function connectDB() {
+    try {
+        await mongoose.connect("mongodb://127.0.0.1:27017/authDB");
+        console.log("MongoDB Connected");
+    } catch (err) {
+        console.log(err);
+        process.exit(1);
+    }
+}
+
+module.exports = connectDB;
+
+
+📁 models/user.model.js
+const mongoose = require("mongoose");
+
+const userSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true
+    },
+    email: {
+        type: String,
+        required: true,
+        unique: true
+    },
+    password: {
+        type: String,
+        required: true
+    }
+});
+
+module.exports = mongoose.model("User", userSchema);
+
+
+📁 controllers/auth.controller.js
+const User = require("../models/user.model");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+
+
+// ================= REGISTER =================
+async function register(req, res) {
+    try {
+        const { name, email, password } = req.body;
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const user = await User.create({
+            name,
+            email,
+            password: hashedPassword
+        });
+
+        res.status(201).json({
+            message: "User registered",
+            user
+        });
+
+    } catch (err) {
+        res.status(400).json({
+            message: "Error registering",
+            error: err.message
+        });
+    }
+}
+
+
+// ================= LOGIN =================
+async function login(req, res) {
+    try {
+        const { email, password } = req.body;
+
+        const user = await User.findOne({ email });
+
+        if (!user) {
+            return res.status(400).json({ message: "User not found" });
+        }
+
+        // Compare password
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        if (!isMatch) {
+            return res.status(400).json({ message: "Invalid password" });
+        }
+
+        // Create token
+        const token = jwt.sign(
+            { id: user._id },
+            "secretkey",
+            { expiresIn: "1h" }
+        );
+
+        res.json({
+            message: "Login successful",
+            token
+        });
+
+    } catch (err) {
+        res.status(500).json({ message: "Login error" });
+    }
+}
+
+module.exports = { register, login };
+
+
+📁 middleware/auth.middleware.js
+const jwt = require("jsonwebtoken");
+
+function authMiddleware(req, res, next) {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+        return res.status(401).json({ message: "No token provided" });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    try {
+        const decoded = jwt.verify(token, "secretkey");
+        req.user = decoded; // attach user info
+        next();
+    } catch {
+        res.status(401).json({ message: "Invalid token" });
+    }
+}
+
+module.exports = authMiddleware;
+
+
+📁 routes/auth.routes.js
+const express = require("express");
+const router = express.Router();
+
+const { register, login } = require("../controllers/auth.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+
+// Routes
+router.post("/register", register);
+router.post("/login", login);
+
+// Protected route
+router.get("/profile", authMiddleware, (req, res) => {
+    res.json({
+        message: "Protected data",
+        user: req.user
+    });
+});
+
+module.exports = router;
+
+
+📁 app.js
+const express = require("express");
+const authRoutes = require("./routes/auth.routes");
+
+const app = express();
+
+app.use(express.json());
+
+// Routes
+app.use("/auth", authRoutes);
+
+module.exports = app;
+
+
+📁 server.js
+const app = require("./app");
+const connectDB = require("./config/db");
+
+connectDB();
+
+app.listen(3000, () => {
+    console.log("Server running at http://localhost:3000");
+});
+
+
+/////Notes////
+//////////////////register function/////////////////////
+🧠 Step-by-Step Flow
+🟢 Step 1: Get Data
+const { name, email, password } = req.body;
+
+👉 Data comes from client (Postman)
+
+🟢 Step 2: Hash Password (VERY IMPORTANT)
+const hashedPassword = await bcrypt.hash(password, 10);
+
+👉 Converts:
+"123456" → "$2b$10$asdhjashd..."
+👉 You NEVER store plain password ❌
+
+🟢 Step 3: Save User
+await User.create({
+    name,
+    email,
+    password: hashedPassword
+});
+
+👉 Stored in DB:
+{
+  "name": "Aryan",
+  "email": "aryan@gmail.com",
+  "password": "$2b$10$abc..."
+}
+🟢 Step 4: Send Response
+res.status(201).json(...)
+
+👉 Confirms success
+
+🔐 Why bcrypt?
+❌ Without bcrypt
+{
+  "password": "123456"
+}
+
+👉 Anyone can see password → VERY DANGEROUS
+✅ With bcrypt
+{
+  "password": "$2b$10$XyZ..."
+}
+
+👉 Impossible to reverse
+🧠 What 10 Means?
+bcrypt.hash(password, 10)
+
+👉 Salt rounds (security level)
+Higher = more secure but slower
+
+////////////////////login function///////////////////
+
+🔥 The Code
+const token = jwt.sign(
+    { id: user._id },
+    "secretkey",
+    { expiresIn: "1h" }
+);
+🧠 One-Line Meaning
+👉 Create a secure identity token for the user after login
+🔥 Break It Down (VERY CLEAR)
+🟢 1. jwt.sign(...)
+
+👉 Function used to create a token
+sign = generate token
+🟢 2. Payload
+{ id: user._id }
+
+👉 Data you want to store inside token
+Example:
+{
+  "id": "65abc123..."
+}
+
+👉 This tells:
+"Which user is logged in"
+🟢 3. Secret Key
+"secretkey"
+
+👉 Used to secure/sign the token
+Only server knows this
+👉 Prevents tampering
+
+🟢 4. Options
+{ expiresIn: "1h" }
+👉 Token will expire after 1 hour
+🔥 What Token Looks Like
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+👉 Looks random, but contains:
+
+Header.Payload.Signature
+🧠 What Happens When You Create Token?
+🟢 Step 1: User Logs In
+Email + Password → Verified
+🟢 Step 2: Server Creates Token
+jwt.sign(...)
+🟢 Step 3: Server Sends Token
+{
+  "token": "abc123..."
+}
+🟢 Step 4: Client Stores Token
+👉 In:
+Postman
+Browser (localStorage / cookies)
+🔥 WHY DO WE CREATE TOKEN? (VERY IMPORTANT)
+❓ Problem Without Token
+👉 Server cannot remember user
+
+Request 1 → login
+Request 2 → who are you? ❌
+✅ Solution: Token
+
+👉 Token acts like:
+ID Card 🎫
+
+🔥 How Token Is Used
+🟢 Client Sends Token
+Authorization: Bearer TOKEN
+🟢 Middleware Verifies
+jwt.verify(token, "secretkey");
+
+👉 Checks:
+Is token valid?
+Is it expired?
+Is it tampered?
+🟢 If Valid
+Access granted ✅
+🟢 If Invalid
+Access denied ❌
+🔥 Why Not Just Send User ID?
+
+👉 Because:
+User can modify it ❌
+
+👉 Token is:
+Signed + Secure ✅
+
+//////////////////////
+🧠 Internal Working (Simple)
+When you create token:
+jwt.sign(payload, secret)
+
+👉 It:
+
+Encodes payload
+Adds signature using secret
+Creates token
+When you verify:
+jwt.verify(token, secret)
+
+👉 It:
+
+Checks signature
+Extracts payload
+🔥 Final Flow (SUPER IMPORTANT)
+Login:
+User → verified → token created
+
+Next Requests:
+Client → sends token
+Server → verifies token
+→ allows access
+
+🎯 Interview Questions
+Q1: Why use JWT?
+👉 Stateless authentication
+Q2: What is stored in token?
+👉 User info (like ID)
+Q3: Why secret key?
+👉 To prevent tampering
+Q4: What is expiresIn?
+👉 Token validity time
+
+////////////////////////////
+🔥 Correct Flow (VERY IMPORTANT)
+🟢 Step 1: First Login
+
+Client sends:
+
+{
+  "email": "aryan@gmail.com",
+  "password": "123456"
+}
+
+Server:
+
+// verify → create token → send
+res.json({ token });
+
+👉 Now:
+
+Client RECEIVES token ✅
+🟢 Step 2: Client Stores Token
+
+👉 Server does NOT store token
+
+👉 Client stores it:
+
+Postman → manually
+Browser → localStorage / cookies
+🟢 Step 3: Future Requests (NOT LOGIN)
+
+👉 Now client sends:
+
+GET /profile
+Authorization: Bearer TOKEN
+
+👉 THIS is where token is used
+
+/////////////////////////////
+🧠 Analogy (Fix This Forever)
+🎫 Movie Ticket
+You buy ticket → (login)
+You get ticket → (token)
+You enter theatre → show ticket (protected route)
+
+👉 You DON’T:
+
+Buy ticket again to enter ❌
+
+////////////////////////Middleware//////////////////////////
+🟢 3. Get Authorization Header
+const authHeader = req.headers.authorization;
+
+👉 Client sends:
+
+Authorization: Bearer abc123token
+
+👉 So:
+
+authHeader = "Bearer abc123token"
+🟢 4. Check If Token Exists
+if (!authHeader) {
+    return res.status(401).json({ message: "No token provided" });
+}
+
+👉 If no header:
+
+User is NOT logged in ❌
+
+👉 Stop request here
+
+🟢 5. Extract Token
+const token = authHeader.split(" ")[1];
+
+👉 Split:
+
+"Bearer abc123"
+   ↓
+["Bearer", "abc123"]
+
+👉 Take:
+
+token = "abc123"
+🟢 6. Verify Token
+const decoded = jwt.verify(token, "secretkey");
+
+👉 This does 3 things:
+
+Check if token is valid
+Check if expired
+Decode payload
+🟢 7. Attach User Data
+req.user = decoded;
+
+👉 Example:
+
+decoded = { id: "123" }
+
+👉 Now:
+
+req.user.id = "123"
+
+👉 Available in next route
+
+🟢 8. Call Next
+next();
+
+👉 Means:
+
+"User is valid → go to route handler"
+🟢 9. Catch Error
+catch {
+    res.status(401).json({ message: "Invalid token" });
+}
+
+👉 If:
+
+Token wrong
+Token expired
+Token tampered
+
+👉 Then:
+
+Access denied ❌
+🔥 Full Flow (VERY CLEAR)
+Client → sends request with token
+        ↓
+Middleware runs
+        ↓
+Check token exists?
+        ↓
+Verify token
+        ↓
+Attach user info
+        ↓
+Call next()
+        ↓
+Route runs
+🧠 Example
+Request:
+GET /auth/profile
+Authorization: Bearer abc123
+Middleware:
+jwt.verify → decoded = { id: "65abc..." }
+req.user = decoded
+Route:
+res.json(req.user);
+
+👉 Output:
+
+{
+  "id": "65abc..."
+}
+///////////////////////////////
+🔥 The Line
+req.user = decoded;
+🧠 One-Line Meaning
+
+👉 Attach logged-in user info to the request object so next functions can use it
+
+🔥 First Understand req
+
+In Express:
+
+(req, res, next)
+
+👉 req = request object
+
+👉 It travels through:
+
+Middleware → Route → Controller
+🧠 Important Property of req
+
+👉 You can add your own data to it
+
+req.anything = value;
+🔥 Now What is decoded?
+
+From this line:
+
+const decoded = jwt.verify(token, "secretkey");
+
+👉 If token was created like:
+
+jwt.sign({ id: user._id }, "secretkey");
+
+👉 Then:
+
+decoded = { id: "65abc123..." }
+🔥 So This Line Means
+req.user = decoded;
+
+👉 Now request becomes:
+
+req.user = {
+  id: "65abc123..."
+};
