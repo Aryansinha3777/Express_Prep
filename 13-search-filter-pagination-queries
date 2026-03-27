@@ -1,1 +1,334 @@
+// Controller: Get all files with search, filter, sort and pagination
 
+const getAllFiles = async (req, res) => {
+  try {
+    // Step 1: Read query params from URL
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 5;
+
+    // Step 2: Calculate how many documents to skip
+    const skip = (page - 1) * limit;
+
+    // Step 3: Read optional filters
+    const search = req.query.search || "";
+    const type = req.query.type || "";
+    const sort = req.query.sort || "latest";
+
+    // Step 4: Base query
+    // Only show files of logged-in user
+    const query = {
+      user: req.user.id
+    };
+
+    // Step 5: Search by filename
+    if (search) {
+      query.filename = {
+        $regex: search,
+        $options: "i"
+      };
+    }
+
+    // Step 6: Filter by file extension/type
+    // Example:
+    // type=image -> .jpg, .png, .jpeg
+    // type=pdf -> .pdf
+    if (type) {
+      if (type === "image") {
+        query.filename = {
+          ...query.filename,
+          $regex: "\\.(jpg|jpeg|png|gif|webp)$",
+          $options: "i"
+        };
+      }
+
+      if (type === "pdf") {
+        query.filename = {
+          ...query.filename,
+          $regex: "\\.pdf$",
+          $options: "i"
+        };
+      }
+    }
+
+    // Step 7: Sorting
+    let sortOption = {};
+
+    if (sort === "latest") {
+      sortOption = { createdAt: -1 };
+    }
+
+    if (sort === "oldest") {
+      sortOption = { createdAt: 1 };
+    }
+
+    if (sort === "name-asc") {
+      sortOption = { filename: 1 };
+    }
+
+    if (sort === "name-desc") {
+      sortOption = { filename: -1 };
+    }
+
+    // Step 8: Get filtered files from database
+    const files = await File.find(query)
+      .sort(sortOption)
+      .skip(skip)
+      .limit(limit);
+
+    // Step 9: Count total files after filters
+    const totalFiles = await File.countDocuments(query);
+
+    // Step 10: Send response
+    res.status(200).json({
+      message: "Files fetched successfully",
+      currentPage: page,
+      totalPages: Math.ceil(totalFiles / limit),
+      totalFiles,
+      files
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      message: error.message
+    });
+  }
+};
+
+Now add this route:
+
+router.get(
+  "/all",
+  authMiddleware,
+  getAllFiles
+);
+Explanation of each part
+1. Pagination
+const page = Number(req.query.page) || 1;
+const limit = Number(req.query.limit) || 5;
+const skip = (page - 1) * limit;
+
+If URL is:
+
+/api/files/all?page=2&limit=5
+
+Then:
+
+page = 2
+limit = 5
+skip = 5
+
+Meaning:
+
+Skip first 5 files
+Show next 5 files
+2. Search
+query.filename = {
+  $regex: search,
+  $options: "i"
+};
+
+If URL is:
+
+/api/files/all?search=cat
+
+Then MongoDB searches filenames containing "cat".
+
+Examples matched:
+
+cat.png
+mycat.jpg
+CatPhoto.jpeg
+
+$options: "i" means case-insensitive.
+
+3. Filter
+/api/files/all?type=image
+
+Will only show image files because regex checks filename ending:
+
+\.(jpg|jpeg|png|gif|webp)$
+
+Similarly:
+
+/api/files/all?type=pdf
+
+Will only show PDF files.
+
+4. Sorting
+/api/files/all?sort=latest
+/api/files/all?sort=oldest
+/api/files/all?sort=name-asc
+/api/files/all?sort=name-desc
+
+MongoDB sort values:
+
+1   -> ascending
+-1  -> descending
+
+Example:
+
+{ createdAt: -1 }
+
+Means newest files first.
+
+5. Final Database Query
+const files = await File.find(query)
+  .sort(sortOption)
+  .skip(skip)
+  .limit(limit);
+
+This is the most important line.
+
+It means:
+
+Find matching files
+Sort them
+Skip some records
+Return limited records
+
+Example request:
+
+GET /api/files/all?search=cat&type=image&page=1&limit=3&sort=latest
+
+Meaning:
+
+Search files containing "cat"
+Only image files
+Show page 1
+Only 3 results
+Latest first
+
+Example response:
+
+{
+  "message": "Files fetched successfully",
+  "currentPage": 1,
+  "totalPages": 2,
+  "totalFiles": 5,
+  "files": [
+    {
+      "_id": "...",
+      "filename": "cat1.jpg"
+    },
+    {
+      "_id": "...",
+      "filename": "mycat.png"
+    }
+  ]
+}
+what is regex
+
+Regex means Regular Expression.
+
+It is a special pattern used to search or match text.
+
+For example:
+
+const text = "cat.png";
+
+If you want to check whether "cat.png" contains "cat":
+
+/cat/
+
+This regex matches:
+
+cat.png
+mycat.jpg
+CatPhoto.jpeg
+
+In MongoDB:
+
+query.filename = {
+  $regex: search,
+  $options: "i"
+};
+
+If:
+
+search = "cat"
+
+Then MongoDB searches filenames containing "cat".
+
+$options: "i" means case-insensitive.
+
+So it will match:
+
+cat.png
+Cat.png
+CAT.jpeg
+
+Another example:
+
+$regex: "\\.pdf$"
+
+This regex means:
+
+\\. → actual dot .
+pdf → letters pdf
+$ → end of string
+
+So it matches:
+
+notes.pdf
+report.pdf
+
+But not:
+
+pdfnotes.jpg
+pdf-image.png
+
+Example image regex:
+
+\\.(jpg|jpeg|png|gif|webp)$
+
+Meaning:
+
+filename should end with:
+jpg
+jpeg
+png
+gif
+webp
+
+Matches:
+
+photo.jpg
+cat.png
+image.webp
+
+Does not match:
+
+document.pdf
+music.mp3
+
+You can think of regex as:
+
+A smart text searching rule
+
+Some common regex symbols:
+
+.      -> any character
+*      -> repeat many times
+$      -> end of string
+^      -> start of string
+|      -> OR
+()     -> group
+
+Example:
+
+/^cat/
+
+Means filename should start with "cat":
+
+cat.png ✅
+catphoto.jpg ✅
+mycat.png ❌
+
+Example:
+
+/cat$/
+
+Means filename should end with "cat":
+
+mycat ✅
+catphoto ❌
