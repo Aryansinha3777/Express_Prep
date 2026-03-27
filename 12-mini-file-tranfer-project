@@ -1,1 +1,382 @@
+/////////////////model/file.js//////////////////////////
+import mongoose from "mongoose";
 
+const fileSchema = new mongoose.Schema({
+  filename: {
+    type: String,
+    required: true
+  },
+  filepath: {
+    type: String,
+    required: true
+  },
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  },
+  uploadedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const File = mongoose.model("File", fileSchema);
+
+export default File;
+
+////////////////controllers/file.controllser.js//////////////////
+import File from "../models/File.js";
+import multer from "multer";
+import fs from "fs";
+
+// Storage config
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, "uploads/");
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "-" + file.originalname);
+  }
+});
+
+// File type validation
+const fileFilter = (req, file, cb) => {
+  if (file.mimetype.startsWith("image/")) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image files are allowed"), false);
+  }
+};
+
+// Upload middleware
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 2 * 1024 * 1024
+  }
+});
+
+// Single file upload controller
+async function uploadFile(req, res) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    const file = new File({
+      filename: req.file.filename,
+      filepath: req.file.path,
+      user: req.user.id
+    });
+
+    await file.save();
+
+    res.status(201).json({
+      message: "Image uploaded successfully",
+      file
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// Multiple file upload controller
+async function uploadMultipleFiles(req, res) {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ message: "No files uploaded" });
+    }
+
+    const savedFiles = [];
+
+    for (const uploadedFile of req.files){
+      const file = new File({
+        filename: uploadedFile.filename,
+        filepath: uploadedFile.path,
+        user: req.user.id
+      });
+
+      await file.save();
+      savedFiles.push(file);
+    }
+
+    res.status(201).json({
+      message: "Files uploaded successfully",
+      files: savedFiles
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// Delete file controller
+async function deleteFile(req, res) {
+  try {
+    const file = await File.findById(req.params.id);
+
+    if (!file) {
+      return res.status(404).json({ message: "File not found" });
+    }
+
+    if (file.user.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    fs.unlinkSync(file.filepath);
+
+    await File.findByIdAndDelete(req.params.id);
+
+    res.status(200).json({
+      message: "File deleted successfully"
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+export { upload, uploadFile, uploadMultipleFiles, deleteFile };
+
+//////////////////////file.routes.js////////////////////////
+import express from "express";
+import {
+  upload,
+  uploadFile,
+  uploadMultipleFiles,
+  deleteFile
+} from "../controllers/fileController.js";
+import authMiddleware from "../middleware/auth.middleware.js";
+
+const router = express.Router();
+
+// Single image upload
+router.post(
+  "/upload",
+  authMiddleware,
+  upload.single("file"),
+  uploadFile
+);
+
+// Multiple image upload
+router.post(
+  "/upload-multiple",
+  authMiddleware,
+  upload.array("files", 5),
+  uploadMultipleFiles
+);
+
+// Delete file
+router.delete(
+  "/delete/:id",
+  authMiddleware,
+  deleteFile
+);
+
+export default router;
+
+////////////////////index.js///////////////////////////
+import "dotenv/config";
+import express from "express";
+import connectDB from "./utils/db.js";
+import userRoute from "./routes/user.routes.js";
+import authRoutes from "./routes/auth.routes.js";
+import fileRoutes from "./routes/fileRoutes.js";
+
+const app = express();
+
+// Middleware
+app.use(express.json());
+
+// Static folder to access uploaded files
+app.use("/uploads", express.static("uploads"));
+
+// Routes
+app.use("/users", userRoute);
+app.use("/auth", authRoutes);
+app.use("/api/files", fileRoutes);
+
+// Multer error handling middleware
+app.use((error, req, res, next) => {
+  if (error.message === "Only image files are allowed") {
+    return res.status(400).json({
+      message: error.message
+    });
+  }
+
+  if (error.code === "LIMIT_FILE_SIZE") {
+    return res.status(400).json({
+      message: "File size should be less than 2MB"
+    });
+  }
+
+  res.status(500).json({
+    message: error.message
+  });
+});
+
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
+  connectDB();
+});
+
+
+////////////////////////////NOTES////////////////////////////////
+
+1️⃣ Client → Backend
+Postman sends a POST /upload request with:
+Header: Authorization: Bearer <JWT>
+Body: form-data → Key: file, Value: chosen image
+Express sees this request and passes it through the middleware chain in order:
+authMiddleware -> multer upload.single("file") -> uploadFile (controller)
+2️⃣ Step inside authMiddleware
+JWT is validated
+req.user is set → user info is attached
+Request moves to next middleware, which is upload.single("file").
+3️⃣ Step inside upload.single("file")
+
+Here’s what happens internally in Multer:
+
+a) Parse the request
+Multer reads the raw multipart/form-data from the request body
+It extracts only the part with key = "file" (because .single("file"))
+It parses headers for this part:
+Content-Disposition → field name, filename
+Content-Type → MIME type
+
+Example parsed info:
+
+{
+  fieldname: "file",
+  originalname: "myphoto.png",
+  encoding: "7bit",
+  mimetype: "image/png",
+  buffer: <binary data>, // if memory storage
+}
+b) Check file type (fileFilter)
+Multer calls your fileFilter function:
+fileFilter(req, file, cb)
+file.mimetype.startsWith("image/") ? cb(null, true) : cb(new Error("Only image files allowed"), false)
+✅ If file passes → continues
+❌ If file fails → skips saving and calls error-handling middleware
+c) Check file size (limits)
+Multer compares file size with limits.fileSize
+If file too large → triggers error → stops processing
+d) Store the file (storage)
+Multer calls storage object (diskStorage) methods:
+destination(req, file, cb) → returns "uploads/"
+filename(req, file, cb) → generates filename: Date.now() + "-" + originalname
+Then multer writes the file to disk (physical folder)
+
+Example saved file info:
+
+uploads/1774612345678-myphoto.png
+e) Attach file info to request
+Multer builds req.file object (for .single()):
+req.file = {
+  fieldname: "file",
+  originalname: "myphoto.png",
+  encoding: "7bit",
+  mimetype: "image/png",
+  destination: "uploads/",
+  filename: "1774612345678-myphoto.png",
+  path: "uploads/1774612345678-myphoto.png",
+  size: 102400 // in bytes
+}
+Important: This is the only thing your controller needs.
+Controller doesn’t touch disk storage, filtering, or limits — Multer has already done it.
+f) Call next()
+After attaching req.file, multer calls next()
+Express passes control to your controller uploadFile(req, res)
+4️⃣ Controller sees
+console.log(req.file);
+
+Output:
+
+{
+  fieldname: 'file',
+  originalname: 'myphoto.png',
+  encoding: '7bit',
+  mimetype: 'image/png',
+  destination: 'uploads/',
+  filename: '1774612345678-myphoto.png',
+  path: 'uploads/1774612345678-myphoto.png',
+  size: 102400
+}
+You just read req.file → save the filename, path, and user in MongoDB
+Response sent back to client → Done ✅
+
+//note//
+
+1️⃣ Multer “layers”
+
+Think of multer as a factory that prepares files for your backend.
+
+Layer 1: Configuration (multer())
+const upload = multer({
+  storage: storage,         // where and how to store files
+  fileFilter: fileFilter,   // rules for which files are allowed
+  limits: { fileSize: 2*1024*1024 } // max size
+});
+Purpose: Set the rules for file handling.
+Output: upload is now a ready-to-use middleware factory.
+At this stage, nothing has happened yet — you’ve only defined how multer behaves.
+Layer 2: Storage
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, "uploads/"),
+  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname)
+});
+Purpose: Decide where to save files and what name to give each file.
+Called by multer automatically when a file is uploaded.
+You never call this manually; multer does it internally.
+Layer 3: File type validation (fileFilter)
+const fileFilter = (req, file, cb) => {
+  if (file.mimetype.startsWith("image/")) cb(null, true);
+  else cb(new Error("Only images allowed"), false);
+};
+Purpose: Decide if multer should accept this file.
+If it rejects, request jumps to your error middleware.
+Layer 4: The middleware you use in routes
+After you define upload, you pick a specific type of upload in your route:
+upload.single("file")    // single file → req.file
+upload.array("files", 5) // multiple files → req.files
+Think of upload like a toolbox, and .single(), .array(), .fields() are different tools inside the box.
+Multer knows which “tool” to apply, and then calls the storage & filter functions automatically.
+2️⃣ Flow in your app
+
+Let’s visualize:
+
+Client -> POST /upload
+        Headers: Authorization
+        Body: form-data (file)
+
+1️⃣ authMiddleware
+   checks JWT -> sets req.user
+
+2️⃣ multer middleware (upload.single("file"))
+   -> fileFilter -> storage
+   -> attaches file info to req.file
+
+3️⃣ Controller (uploadFile)
+   -> uses req.file + req.user
+   -> saves info in DB
+   -> sends response
+
+For multiple files:
+
+upload.array("files", 5)
+-> same flow, but attaches array to req.files
+3️⃣ Why it feels confusing
+multer() → upload is like the factory
+.single(), .array() pick a specific worker in the factory
+storage & fileFilter are just rules the worker follows
+Controller only gets the prepared req.file or req.files and works with it
+
+💡 Key idea: Controller never worries about storing the file, multer handles that.
+
+4️⃣ Quick memory trick
+Multer = factory
+Storage = where/how
+FileFilter = rules
+upload.single / array = pick worker
+Controller = final step, just saves info to DB and responds
